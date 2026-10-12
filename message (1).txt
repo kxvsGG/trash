@@ -1,0 +1,410 @@
+local players = game:GetService("Players")
+local rs = game:GetService("ReplicatedStorage")
+local insert = game:GetService("InsertService")
+local run = game:GetService("RunService")
+local player = players.LocalPlayer
+
+local url = "https://pastefy.app/Y3GLUl6D/raw"
+local poll = 0.1
+
+local function get(url)
+    if game.HttpGet then return game:HttpGet(url) end
+    if httpget then return httpget(url) end
+    if request then return request({Url = url, Method = "GET"}).Body end
+    error("no http")
+end
+
+local raw = get(url)
+
+local data = loadstring(raw .. "\nreturn WeaponData")()
+if type(data) ~= "table" then error("not a table") end
+
+local function count(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n
+end
+
+local colors = {
+    Color3.fromRGB(255, 0, 0),
+    Color3.fromRGB(255, 255, 0),
+    Color3.fromRGB(0, 255, 0),
+    Color3.fromRGB(0, 255, 255),
+    Color3.fromRGB(0, 0, 255),
+    Color3.fromRGB(255, 0, 255),
+}
+
+local function chroma(t)
+    local n = #colors
+    local p = t % n
+    local i = math.floor(p)
+    return colors[i + 1]:Lerp(colors[((i + 1) % n) + 1], p - i)
+end
+
+local function mesh(id, size)
+    local part
+    pcall(function()
+        part = insert:CreateMeshPartAsync(id, Enum.CollisionFidelity.Box, Enum.RenderFidelity.Precise)
+    end)
+    if not part and Content and Content.fromUri then
+        pcall(function()
+            part = insert:CreateMeshPartAsync(Content.fromUri(id), Enum.CollisionFidelity.Box, Enum.RenderFidelity.Precise)
+        end)
+    end
+    if part then
+        pcall(function() part.Size = size end)
+        part.Anchored = false
+        part.CanCollide = false
+        part.CanQuery = false
+        part.CanTouch = false
+        part.Massless = true
+        part.Transparency = 0
+        part.Material = Enum.Material.Plastic
+        return part
+    end
+    local p = Instance.new("Part")
+    p.Size = size
+    p.Anchored = false
+    p.CanCollide = false
+    p.CanQuery = false
+    p.CanTouch = false
+    p.Massless = true
+    p.Transparency = 0
+    p.Material = Enum.Material.Plastic
+    local sm = Instance.new("SpecialMesh")
+    sm.MeshType = Enum.MeshType.FileMesh
+    pcall(function() sm.MeshId = id end)
+    sm.Parent = p
+    return p
+end
+
+local function build(name)
+    local d = data[name]
+    if not d then return nil end
+
+    if d.IsChroma then
+        local tmp, orig = nil, Vector3.new(1, 1, 1)
+        pcall(function()
+            tmp = insert:CreateMeshPartAsync(d.MeshId, Enum.CollisionFidelity.Box, Enum.RenderFidelity.Precise)
+        end)
+        if not tmp and Content and Content.fromUri then
+            pcall(function()
+                tmp = insert:CreateMeshPartAsync(Content.fromUri(d.MeshId), Enum.CollisionFidelity.Box, Enum.RenderFidelity.Precise)
+            end)
+        end
+        if tmp then
+            orig = tmp.Size
+            tmp:Destroy()
+        end
+
+        local p = Instance.new("Part")
+        p.Name = name
+        p.Size = d.Size
+        p.Anchored = false
+        p.CanCollide = false
+        p.CanQuery = false
+        p.CanTouch = false
+        p.Massless = true
+        p.Transparency = 0
+        p.Material = Enum.Material.Plastic
+
+        local sm = Instance.new("SpecialMesh")
+        sm.Name = "ChromaMesh"
+        sm.MeshType = Enum.MeshType.FileMesh
+        sm.MeshId = d.MeshId
+        sm.TextureId = d.ColorMapId
+        sm.VertexColor = Vector3.new(1, 1, 1)
+        sm.Scale = Vector3.new(d.Size.X / orig.X, d.Size.Y / orig.Y, d.Size.Z / orig.Z)
+        sm.Parent = p
+        return p
+    else
+        local p = mesh(d.MeshId, d.Size)
+        p.Name = name
+        p.Color = Color3.fromRGB(255, 255, 255)
+        local sa = Instance.new("SurfaceAppearance")
+        sa.ColorMap = d.ColorMapId
+        sa.AlphaMode = Enum.AlphaMode.Overlay
+        sa.Parent = p
+        return p
+    end
+end
+
+local function startChroma(part)
+    local m = part:FindFirstChild("ChromaMesh")
+    if not m then return nil end
+    return run.Heartbeat:Connect(function()
+        local c = chroma(os.clock())
+        m.VertexColor = Vector3.new(c.R, c.G, c.B)
+    end)
+end
+
+local equip = require(rs:WaitForChild("ClientServices"):WaitForChild("EquipService"))
+local profile = require(rs:WaitForChild("Modules"):WaitForChild("ProfileData"))
+
+local state = {}
+local last = {}
+local token = {}
+local hidden = {}
+local chromaConns = {}
+
+local function char()
+    return player.Character
+end
+
+local function display(slot)
+    local c = char()
+    if not c then return nil end
+    local r = c:FindFirstChild("DisplayRef" .. slot)
+    return r and r.Value or nil
+end
+
+local function cleanup(slot)
+    if state[slot] and state[slot].overlay then
+        pcall(function() state[slot].overlay:Destroy() end)
+    end
+    if chromaConns[slot] then
+        pcall(function() chromaConns[slot]:Disconnect() end)
+        chromaConns[slot] = nil
+    end
+    if hidden[slot] then
+        for _, item in ipairs(hidden[slot]) do
+            pcall(function() item.inst[item.prop] = item.val end)
+        end
+        hidden[slot] = nil
+    end
+    state[slot] = nil
+end
+
+local function hide(slot, item)
+    if not hidden[slot] then hidden[slot] = {} end
+    if item:IsA("BasePart") or item:IsA("Decal") then
+        table.insert(hidden[slot], {inst = item, prop = "Transparency", val = item.Transparency})
+        pcall(function() item.Transparency = 1 end)
+    elseif item:IsA("SurfaceAppearance") then
+        table.insert(hidden[slot], {inst = item, prop = "Enabled", val = item.Enabled})
+        pcall(function() item.Enabled = false end)
+    elseif item:IsA("ParticleEmitter") or item:IsA("Trail") or item:IsA("Beam") or item:IsA("Fire") or item:IsA("Smoke") or item:IsA("Sparkles") then
+        table.insert(hidden[slot], {inst = item, prop = "Enabled", val = item.Enabled})
+        pcall(function() item.Enabled = false end)
+    end
+end
+
+local function baseMesh(part)
+    if not part then return "" end
+    if part:IsA("MeshPart") then return part.MeshId or "" end
+    local sm = part:FindFirstChildWhichIsA("SpecialMesh", true)
+    return sm and sm.MeshId or ""
+end
+
+local function apply(slot, name)
+    if state[slot] and last[slot] == name and name ~= nil then return end
+
+    token[slot] = (token[slot] or 0) + 1
+    local my = token[slot]
+
+    cleanup(slot)
+
+    local d = name and data[name]
+    if not d then
+        last[slot] = name
+        return
+    end
+    last[slot] = name
+
+    local base = display(slot)
+    if not base then return end
+
+    if baseMesh(base) == d.MeshId and baseMesh(base) ~= "" then return end
+
+    hide(slot, base)
+    for _, desc in ipairs(base:GetDescendants()) do
+        hide(slot, desc)
+    end
+
+    local overlay = build(name)
+    if not overlay or token[slot] ~= my or not base.Parent then
+        if hidden[slot] then
+            for _, item in ipairs(hidden[slot]) do
+                pcall(function() item.inst[item.prop] = item.val end)
+            end
+            hidden[slot] = nil
+        end
+        if overlay then overlay:Destroy() end
+        return
+    end
+
+    pcall(function()
+        overlay.CFrame = base.CFrame
+        overlay.Size = d.Size
+    end)
+    overlay.Parent = base.Parent
+
+    local w = Instance.new("WeldConstraint")
+    w.Part0 = overlay
+    w.Part1 = base
+    w.Parent = overlay
+
+    state[slot] = {overlay = overlay}
+
+    if d.IsChroma then
+        chromaConns[slot] = startChroma(overlay)
+    end
+end
+
+local function spawn(name)
+    if not data[name] then return end
+    local owned = profile.Weapons.Owned
+    owned[name] = (owned[name] or 0) + 1
+    local changed = rs:WaitForChild("Remotes"):WaitForChild("Inventory"):WaitForChild("InventoryDataChanged")
+    pcall(function() changed:Fire("Weapons", name, owned[name]) end)
+    local popup = require(rs:WaitForChild("ClientServices"):WaitForChild("ItemPopupService"))
+    pcall(function()
+        popup:AddNewItem(data[name].Id, "Weapons", 1)
+    end)
+end
+
+
+local eq = {Knife = nil, Gun = nil}
+pcall(function()
+    eq.Knife = profile.Weapons.Equipped.Knife
+    eq.Gun = profile.Weapons.Equipped.Gun
+end)
+
+task.spawn(function()
+    for _, slot in ipairs({"Knife", "Gun"}) do
+        local e = profile.Weapons.Equipped[slot]
+        if e then task.spawn(function() apply(slot, e) end) end
+    end
+
+    while true do
+        for _, slot in ipairs({"Knife", "Gun"}) do
+            local e
+            pcall(function() e = profile.Weapons.Equipped[slot] end)
+            if e ~= eq[slot] then
+                eq[slot] = e
+                task.spawn(function() apply(slot, e) end)
+            end
+        end
+        task.wait(poll)
+    end
+end)
+
+equip.EquippedChanged.Event:Connect(function(t, n)
+    if t == "Knife" or t == "Gun" then
+        eq[t] = n
+        task.spawn(function() apply(t, n) end)
+    end
+end)
+
+local function watch(c)
+    c.ChildAdded:Connect(function(child)
+        local n = child.Name
+        if n == "DisplayRefKnife" or n == "DisplayRefGun" then
+            local slot = (n == "DisplayRefKnife") and "Knife" or "Gun"
+            task.delay(0.2, function()
+                local cur = state[slot] and last[slot]
+                if cur then
+                    state[slot] = nil
+                    apply(slot, cur)
+                end
+            end)
+        end
+    end)
+end
+
+if char() then watch(char()) end
+
+player.CharacterAdded:Connect(function(c)
+    for _, slot in ipairs({"Knife", "Gun"}) do
+        if state[slot] and state[slot].overlay then
+            pcall(function() state[slot].overlay:Destroy() end)
+        end
+    end
+    state = {}
+    hidden = {}
+    chromaConns = {}
+    watch(c)
+    task.delay(1, function()
+        for _, slot in ipairs({"Knife", "Gun"}) do
+            if last[slot] then apply(slot, last[slot]) end
+        end
+    end)
+end)
+
+
+local WindUI = loadstring(game:HttpGet(
+    "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua",
+    true
+))()
+
+local window = WindUI:CreateWindow({
+    Title = "Horizon Hub",
+    Icon = "sword",
+    Author = "Temphor",
+    Folder = "HOrizon",
+    Size = UDim2.fromOffset(550, 420),
+    Transparent = true,
+    Theme = "Dark",
+    Resizable = true
+})
+
+local tab = window:Tab({
+    Title = "Skins",
+    Icon = "gem"
+})
+
+local skins = {}
+
+local function refreshSkins()
+    skins = {}
+    for name in pairs(data) do
+        skins[#skins + 1] = name
+    end
+    table.sort(skins, function(a, b)
+        return a:lower() < b:lower()
+    end)
+end
+
+refreshSkins()
+
+local selectedSkin = skins[1]
+
+local dropdown = tab:Dropdown({
+    Title = "Select Skin",
+    Values = skins,
+    Value = selectedSkin,
+    Multi = false,
+    AllowNone = false,
+    SearchBarEnabled = true,
+
+    Callback = function(value)
+        selectedSkin = value
+    end
+})
+
+tab:Button({
+    Title = "Spawn Selected",
+    Icon = "plus",
+
+    Callback = function()
+        if selectedSkin and data[selectedSkin] then
+            spawn(selectedSkin)
+
+            WindUI:Notify({
+                Title = "Spawned",
+                Content = selectedSkin,
+                Duration = 2
+            })
+        end
+    end
+})
+
+tab:Button({
+    Title = "Refresh",
+    Icon = "refresh-cw",
+
+    Callback = function()
+        refreshSkins()
+        dropdown:Refresh(skins)
+    end
+})
